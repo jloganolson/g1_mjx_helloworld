@@ -12,7 +12,11 @@ from unitree_sdk2py.utils.thread import RecurrentThread
 from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
 
 import numpy as np
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
+NETWORK_CARD_NAME = os.getenv('NETWORK_CARD_NAME')
 G1_NUM_MOTOR = 29
 
 Kp = [
@@ -125,7 +129,24 @@ class Custom:
         self.counter_ +=1
         if (self.counter_ % 500 == 0) :
             self.counter_ = 0
-            print(self.low_state.imu_state.rpy)
+            # print("IMU State Information:")
+            # print(f"  Quaternion: {self.low_state.imu_state.quaternion}")
+            # print(f"  Gyroscope: {self.low_state.imu_state.gyroscope}")
+            # print(f"  Accelerometer: {self.low_state.imu_state.accelerometer}")
+            # print(f"  RPY: {self.low_state.imu_state.rpy}")
+            # print(f"  Temperature: {self.low_state.imu_state.temperature}")
+
+            print("LowState_ message keys:")
+            for key in vars(self.low_state):
+                print(f"  {key}")
+
+            # print(f"  RPY: {self.low_state.imu_state.rpy}")
+            # print(f"  Quaternion: {self.low_state.imu_state.quaternion}")
+            # print(f"  Acceleration: {self.low_state.imu_state.acceleration}")
+            # print(f"  Angular Velocity: {self.low_state.imu_state.angular_velocity}")
+            # print(f"  Linear Velocity: {self.low_state.imu_state.linear_velocity}")
+
+            # print(self.low_state.imu_state.rpy)
 
     def LowCmdWrite(self):
         self.time_ += self.control_dt_
@@ -192,10 +213,12 @@ if __name__ == '__main__':
     print("WARNING: Please ensure there are no obstacles around the robot while running this example.")
     input("Press Enter to continue...")
 
-    if len(sys.argv)>1:
-        ChannelFactoryInitialize(0, sys.argv[1])
-    else:
-        ChannelFactoryInitialize(0)
+    ChannelFactoryInitialize(0, NETWORK_CARD_NAME)
+
+    # if len(sys.argv)>1:
+    #     ChannelFactoryInitialize(0, sys.argv[1])
+    # else:
+    #     ChannelFactoryInitialize(0)
 
     custom = Custom()
     custom.Init()
