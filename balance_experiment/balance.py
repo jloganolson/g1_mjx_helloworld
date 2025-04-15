@@ -1,13 +1,17 @@
 
 from typing import Any, Dict, Optional, Union
 
-from etils import epath
 import jax
 from ml_collections import config_dict
 import mujoco
 from mujoco import mjx
+import jax.numpy as jp
+from mujoco.mjx._src import math
+
+import numpy as np
 from mujoco_playground._src.collision import geoms_colliding
 from mujoco_playground._src import collision
+
 
 from mujoco_playground._src import mjx_env
 import g1_constants as consts
@@ -79,12 +83,13 @@ class G1Env(mjx_env.MjxEnv):
 
   def __init__(
       self,
-      config: config_dict.ConfigDict,
+      config: config_dict.ConfigDict = default_config(),
       config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None,
   ) -> None:
     super().__init__(config, config_overrides)
 
-    self._mj_model =  mujoco.MjModel.from_xml_path("./g1_description/scene_mjx_alt.xml")
+    self._xml_path = "../g1_description/scene_mjx_alt.xml"
+    self._mj_model =  mujoco.MjModel.from_xml_path(self._xml_path)
 
     self._mj_model.opt.timestep = self.sim_dt
 
@@ -143,7 +148,7 @@ class G1Env(mjx_env.MjxEnv):
     # qpos[7:]=*U(0.5, 1.5)
     rng, key = jax.random.split(rng)
     qpos = qpos.at[7:].set(
-        qpos[7:] * jax.random.uniform(key, (29,), minval=0.5, maxval=1.5)
+        qpos[7:] * jax.random.uniform(key, (23,), minval=0.5, maxval=1.5)
     )
 
     # d(xyzrpy)=U(-0.5, 0.5)
@@ -166,7 +171,6 @@ class G1Env(mjx_env.MjxEnv):
     info = {
         "rng": rng,
         "step": 0,
-        # "command": cmd,
         "last_act": jp.zeros(self.mjx_model.nu),
         "last_last_act": jp.zeros(self.mjx_model.nu),
         "motor_targets": jp.zeros(self.mjx_model.nu),
@@ -333,10 +337,9 @@ class G1Env(mjx_env.MjxEnv):
       state = jp.hstack([
           noisy_gyro,  # 3
           noisy_gravity,  # 3
-          info["command"],  # 3
-          noisy_joint_angles - self._default_pose,  # 29
-          noisy_joint_vel,  # 29
-          info["last_act"],  # 29
+          noisy_joint_angles - self._default_pose,  # 23
+          noisy_joint_vel,  # 23
+          info["last_act"],  # 23
       ])
 
       accelerometer = self.get_accelerometer(data, "pelvis")
@@ -354,7 +357,7 @@ class G1Env(mjx_env.MjxEnv):
           joint_angles - self._default_pose,
           joint_vel,
           root_height,  # 1
-          data.actuator_force,  # 29
+          data.actuator_force,  # 23
           contact,  # 2
           # feet_vel,  # 4*3
       ])
@@ -371,7 +374,7 @@ class G1Env(mjx_env.MjxEnv):
       info: dict[str, Any],
       done: jax.Array,
   ) -> dict[str, jax.Array]:
-    up = data.site_xmat[self._imu_site_id] @ jp.array([0.0, 0.0, 1.0])
+    up = data.site_xmat[self._pelvis_imu_site_id] @ jp.array([0.0, 0.0, 1.0])
     # joint_torques = data.actuator_force
     # torso_height = data.site_xpos[self._imu_site_id][2]
     return {
@@ -444,9 +447,9 @@ class G1Env(mjx_env.MjxEnv):
 
   # Accessors.
 
-  # @property
-  # def xml_path(self) -> str:
-  #   return self._xml_path
+  @property
+  def xml_path(self) -> str:
+    return self._xml_path
 
   @property
   def action_size(self) -> int:
