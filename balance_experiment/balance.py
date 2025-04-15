@@ -37,7 +37,7 @@ def default_config() -> config_dict.ConfigDict:
           #the only 5 non-zero in go1 handstand
           height=1.0,
           orientation=1.0,
-          contact=-0.1,
+          # contact=-0.1,
           dof_pos_limits=-0.5,
           pose=-0.1,
         ),
@@ -61,7 +61,7 @@ def default_config() -> config_dict.ConfigDict:
           # ),
         # tracking_sigma=0.25,
         # max_foot_height=0.15,
-        # base_height_target=0.5,
+        base_height_target=0.793,
         # max_contact_force=500.0,
       ),
       push_config=config_dict.create(
@@ -117,6 +117,13 @@ class G1Env(mjx_env.MjxEnv):
 
     self._pelvis_imu_site_id = self._mj_model.site("imu_in_pelvis").id
 
+    self._desired_up_vec = jp.array([0.0, 1.0, 0.0])
+   # Note: First joint is freejoint.
+    self._lowers, self._uppers = self.mj_model.jnt_range[1:].T
+    c = (self._lowers + self._uppers) / 2
+    r = self._uppers - self._lowers
+    self._soft_lowers = c - 0.5 * r * self._config.soft_joint_pos_limit_factor
+    self._soft_uppers = c + 0.5 * r * self._config.soft_joint_pos_limit_factor
 
 
   def reset(self, rng: jax.Array) -> mjx_env.State:
@@ -221,7 +228,7 @@ class G1Env(mjx_env.MjxEnv):
     done = self._get_termination(data)
 
     rewards = self._get_reward(
-        data, action, state.info, state.metrics, done, first_contact, contact
+        data, action, state.info, done
     )
     rewards = {
         k: v * self._config.reward_config.scales[k] for k, v in rewards.items()
@@ -357,12 +364,48 @@ class G1Env(mjx_env.MjxEnv):
           "privileged_state": privileged_state,
       }
     
-  def _get_reward(self, data: mjx.Data) -> dict[str, jax.Array]:
+  def _get_reward(
+      self,
+      data: mjx.Data,
+      action: jax.Array,
+      info: dict[str, Any],
+      done: jax.Array,
+  ) -> dict[str, jax.Array]:
+    up = data.site_xmat[self._imu_site_id] @ jp.array([0.0, 0.0, 1.0])
+    # joint_torques = data.actuator_force
+    # torso_height = data.site_xpos[self._imu_site_id][2]
     return {
-        "target_joint": self.joint_target_l2(data.qpos, self.target_joints, jp.ones_like(self.target_joints)),
-        "joint_deviation": self.joint_deviation_l1(data.qpos, self.other_joints),
+        "height": self._cost_base_height(data.qpos[2]),
+        "orientation": self._reward_orientation(
+            up, self._desired_up_vec
+        ),
+        # "contact": self._cost_contact(data), 
+        "dof_pos_limits": self._cost_joint_pos_limits(data.qpos[7:]),
+        "pose": self._cost_pose(data.qpos[7:]),
     }
   
+
+  def _reward_orientation(
+      self, imu_up_vec: jax.Array, world_up_vec: jax.Array
+  ) -> jax.Array:
+    cos_dist = jp.dot(imu_up_vec, world_up_vec)
+    normalized = 0.5 * cos_dist + 0.5
+    return jp.square(normalized)
+
+  def _cost_base_height(self, base_height: jax.Array) -> jax.Array:
+    return jp.square(
+        base_height - self._config.reward_config.base_height_target
+    )
+
+
+  def _cost_pose(self, qpos: jax.Array) -> jax.Array:
+    return jp.sum(jp.square(qpos - self._default_pose))
+
+  def _cost_joint_pos_limits(self, qpos: jax.Array) -> jax.Array:
+    out_of_limits = -jp.clip(qpos - self._soft_lowers, None, 0.0)
+    out_of_limits += jp.clip(qpos - self._soft_uppers, 0.0, None)
+    return jp.sum(out_of_limits)
+
   def get_gravity(self, data: mjx.Data, frame: str) -> jax.Array:
     """Return the gravity vector in the world frame."""
     return mjx_env.get_sensor_data(
