@@ -1,0 +1,418 @@
+
+from typing import Any, Dict, Optional, Union
+
+from etils import epath
+import jax
+from ml_collections import config_dict
+import mujoco
+from mujoco import mjx
+from mujoco_playground._src.collision import geoms_colliding
+from mujoco_playground._src import collision
+
+from mujoco_playground._src import mjx_env
+import g1_constants as consts
+
+def default_config() -> config_dict.ConfigDict:
+    return config_dict.create(
+        ctrl_dt=0.02,
+        sim_dt=0.002,
+        episode_length=1000,
+        action_repeat=1,
+        action_scale=0.5,
+        history_len=1,
+        restricted_joint_range=False,
+        soft_joint_pos_limit_factor=0.95,
+        noise_config=config_dict.create(
+          level=1.0,  # Set to 0.0 to disable noise.
+          scales=config_dict.create(
+              joint_pos=0.03,
+              joint_vel=1.5,
+              gravity=0.05,
+              linvel=0.1,
+              gyro=0.2,
+          ),
+      ),
+     reward_config=config_dict.create(
+        scales=config_dict.create(
+          #the only 5 non-zero in go1 handstand
+          height=1.0,
+          orientation=1.0,
+          contact=-0.1,
+          dof_pos_limits=-0.5,
+          pose=-0.1,
+        ),
+          # scales=config_dict.create(
+          #     # Base related rewards.
+          #     height=1.0,
+          #     orientation=1.0,
+          #     contact=-0.1,
+          #     # Energy related rewards.
+          #     torques=0.0,
+          #     action_rate=0.0,
+          #     # For finetuning, use energy=-0.003 and dof_acc=-2.5e-7.
+          #     energy=0.0,
+          #     dof_acc=0.0,
+          #     # Other rewards.
+          #     termination=0.0,
+          #     # Pose related rewards.
+          #     dof_pos_limits=-0.5,
+          #     pose=-0.1,
+          #     stay_still=0.0,
+          # ),
+        # tracking_sigma=0.25,
+        # max_foot_height=0.15,
+        # base_height_target=0.5,
+        # max_contact_force=500.0,
+      ),
+      push_config=config_dict.create(
+          enable=True,
+          interval_range=[5.0, 10.0],
+          magnitude_range=[0.1, 2.0],
+      ),
+      # lin_vel_x=[-1.0, 1.0],
+      # lin_vel_y=[-0.5, 0.5],
+      # ang_vel_yaw=[-1.0, 1.0],
+    )
+
+class G1Env(mjx_env.MjxEnv):
+  """Base class for G1 environments."""
+
+  def __init__(
+      self,
+      config: config_dict.ConfigDict,
+      config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None,
+  ) -> None:
+    super().__init__(config, config_overrides)
+
+    self._mj_model =  mujoco.MjModel.from_xml_path("./g1_description/scene_mjx_alt.xml")
+
+    self._mj_model.opt.timestep = self.sim_dt
+
+    if self._config.restricted_joint_range:
+      self._mj_model.jnt_range[1:] = consts.RESTRICTED_JOINT_RANGE
+      self._mj_model.actuator_ctrlrange[:] = consts.RESTRICTED_JOINT_RANGE
+
+    self._mj_model.vis.global_.offwidth = 3840
+    self._mj_model.vis.global_.offheight = 2160
+
+    self._mjx_model = mjx.put_model(self._mj_model)
+
+    self._post_init()
+
+  def _post_init(self) -> None:
+    self._init_q = jp.array(self._mj_model.keyframe("default_pose").qpos)
+    self._default_pose = jp.array(self._mj_model.keyframe("default_pose").qpos[7:])
+
+    self._floor_geom_id = self._mj_model.geom("floor").id
+    self._feet_geom_id = np.array([self._mj_model.geom(name).id for name in consts.FEET_GEOMS])
+
+    self._left_hand_geom_id = self._mj_model.geom("left_hand_collision").id
+    self._right_hand_geom_id = self._mj_model.geom("right_hand_collision").id
+    self._left_foot_geom_id = self._mj_model.geom("left_foot").id
+    self._right_foot_geom_id = self._mj_model.geom("right_foot").id
+    self._left_shin_geom_id = self._mj_model.geom("left_shin").id
+    self._right_shin_geom_id = self._mj_model.geom("right_shin").id
+    self._left_thigh_geom_id = self._mj_model.geom("left_thigh").id
+    self._right_thigh_geom_id = self._mj_model.geom("right_thigh").id
+
+    self._pelvis_imu_site_id = self._mj_model.site("imu_in_pelvis").id
+
+
+
+  def reset(self, rng: jax.Array) -> mjx_env.State:
+    qpos = self._init_q
+    qvel = jp.zeros(self.mjx_model.nv)
+
+    # x=+U(-0.5, 0.5), y=+U(-0.5, 0.5), yaw=U(-3.14, 3.14).
+    rng, key = jax.random.split(rng)
+    dxy = jax.random.uniform(key, (2,), minval=-0.5, maxval=0.5)
+    qpos = qpos.at[0:2].set(qpos[0:2] + dxy)
+    rng, key = jax.random.split(rng)
+    yaw = jax.random.uniform(key, (1,), minval=-3.14, maxval=3.14)
+    quat = math.axis_angle_to_quat(jp.array([0, 0, 1]), yaw)
+    new_quat = math.quat_mul(qpos[3:7], quat)
+    qpos = qpos.at[3:7].set(new_quat)
+
+    # qpos[7:]=*U(0.5, 1.5)
+    rng, key = jax.random.split(rng)
+    qpos = qpos.at[7:].set(
+        qpos[7:] * jax.random.uniform(key, (29,), minval=0.5, maxval=1.5)
+    )
+
+    # d(xyzrpy)=U(-0.5, 0.5)
+    rng, key = jax.random.split(rng)
+    qvel = qvel.at[0:6].set(
+        jax.random.uniform(key, (6,), minval=-0.5, maxval=0.5)
+    )
+
+    data = mjx_env.init(self.mjx_model, qpos=qpos, qvel=qvel, ctrl=qpos[7:])
+
+    # Sample push interval.
+    rng, push_rng = jax.random.split(rng)
+    push_interval = jax.random.uniform(
+        push_rng,
+        minval=self._config.push_config.interval_range[0],
+        maxval=self._config.push_config.interval_range[1],
+    )
+    push_interval_steps = jp.round(push_interval / self.dt).astype(jp.int32)
+
+    info = {
+        "rng": rng,
+        "step": 0,
+        # "command": cmd,
+        "last_act": jp.zeros(self.mjx_model.nu),
+        "last_last_act": jp.zeros(self.mjx_model.nu),
+        "motor_targets": jp.zeros(self.mjx_model.nu),
+        # "last_contact": jp.zeros(2, dtype=bool),
+        # Push related.
+        "push": jp.array([0.0, 0.0]),
+        "push_step": 0,
+        "push_interval_steps": push_interval_steps,
+    }
+
+    metrics = {}
+    for k in self._config.reward_config.scales.keys():
+        metrics[f"reward/{k}"] = jp.zeros(())
+    
+    contact = jp.array([
+        geoms_colliding(data, geom_id, self._floor_geom_id)
+        for geom_id in self._feet_geom_id
+    ])
+    reward, done = jp.zeros(2)  # pylint: disable=redefined-outer-name
+
+    obs = self._get_obs(data, info, contact)
+    return mjx_env.State(data, obs, reward, done, metrics, info)
+
+  def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
+    
+    state.info["rng"], push1_rng, push2_rng = jax.random.split(
+        state.info["rng"], 3
+    )
+    push_theta = jax.random.uniform(push1_rng, maxval=2 * jp.pi)
+    push_magnitude = jax.random.uniform(
+        push2_rng,
+        minval=self._config.push_config.magnitude_range[0],
+        maxval=self._config.push_config.magnitude_range[1],
+    )
+    push = jp.array([jp.cos(push_theta), jp.sin(push_theta)])
+    push *= (
+        jp.mod(state.info["push_step"] + 1, state.info["push_interval_steps"])
+        == 0
+    )
+    push *= self._config.push_config.enable
+    qvel = state.data.qvel
+    qvel = qvel.at[:2].set(push * push_magnitude + qvel[:2])
+    data = state.data.replace(qvel=qvel)
+    state = state.replace(data=data)
+
+    motor_targets = self._default_pose + action * self._config.action_scale
+    data = mjx_env.step(
+        self.mjx_model, state.data, motor_targets, self.n_substeps
+    )
+    state.info["motor_targets"] = motor_targets
+
+    contact = jp.array([
+        geoms_colliding(data, geom_id, self._floor_geom_id)
+        for geom_id in self._feet_geom_id
+    ])
+    # contact_filt = contact | state.info["last_contact"]
+    
+    obs = self._get_obs(data, state.info, contact)
+    done = self._get_termination(data)
+
+    rewards = self._get_reward(
+        data, action, state.info, state.metrics, done, first_contact, contact
+    )
+    rewards = {
+        k: v * self._config.reward_config.scales[k] for k, v in rewards.items()
+    }
+    reward = sum(rewards.values()) * self.dt
+
+    state.info["push"] = push
+    state.info["step"] += 1
+    state.info["push_step"] += 1
+    
+    state.info["last_last_act"] = state.info["last_act"]
+    state.info["last_act"] = action
+    state.info["rng"], cmd_rng = jax.random.split(state.info["rng"])
+    
+    # state.info["last_contact"] = contact
+    
+    for k, v in rewards.items():
+      state.metrics[f"reward/{k}"] = v
+    
+    
+    done = done.astype(reward.dtype)
+    state = state.replace(data=data, obs=obs, reward=reward, done=done)
+    return state
+    
+    
+  def _get_termination(self, data: mjx.Data) -> jax.Array:
+    fall_termination = self.get_gravity(data, "pelvis")[-1] < 0.0
+    contact_termination = collision.geoms_colliding(
+        data,
+        self._right_foot_geom_id,
+        self._left_foot_geom_id,
+    )
+    contact_termination |= collision.geoms_colliding(
+        data,
+        self._left_foot_geom_id,
+        self._right_shin_geom_id,
+    )
+    contact_termination |= collision.geoms_colliding(
+        data,
+        self._right_foot_geom_id,
+        self._left_shin_geom_id,
+    )
+    return (
+        fall_termination
+        | contact_termination
+        | jp.isnan(data.qpos).any()
+        | jp.isnan(data.qvel).any()
+    )
+
+  def _get_obs(
+        self, data: mjx.Data, info: dict[str, Any], contact: jax.Array
+    ) -> mjx_env.Observation:
+      gyro = self.get_gyro(data, "pelvis")
+      info["rng"], noise_rng = jax.random.split(info["rng"])
+      noisy_gyro = (
+          gyro
+          + (2 * jax.random.uniform(noise_rng, shape=gyro.shape) - 1)
+          * self._config.noise_config.level
+          * self._config.noise_config.scales.gyro
+      )
+
+      gravity = data.site_xmat[self._pelvis_imu_site_id].T @ jp.array([0, 0, -1])
+      info["rng"], noise_rng = jax.random.split(info["rng"])
+      noisy_gravity = (
+          gravity
+          + (2 * jax.random.uniform(noise_rng, shape=gravity.shape) - 1)
+          * self._config.noise_config.level
+          * self._config.noise_config.scales.gravity
+      )
+
+      joint_angles = data.qpos[7:]
+      info["rng"], noise_rng = jax.random.split(info["rng"])
+      noisy_joint_angles = (
+          joint_angles
+          + (2 * jax.random.uniform(noise_rng, shape=joint_angles.shape) - 1)
+          * self._config.noise_config.level
+          * self._config.noise_config.scales.joint_pos
+      )
+
+      joint_vel = data.qvel[6:]
+      info["rng"], noise_rng = jax.random.split(info["rng"])
+      noisy_joint_vel = (
+          joint_vel
+          + (2 * jax.random.uniform(noise_rng, shape=joint_vel.shape) - 1)
+          * self._config.noise_config.level
+          * self._config.noise_config.scales.joint_vel
+      )
+
+      # cos = jp.cos(info["phase"])
+      # sin = jp.sin(info["phase"])
+      # phase = jp.concatenate([cos, sin])
+
+      # linvel = self.get_local_linvel(data, "pelvis")
+      # info["rng"], noise_rng = jax.random.split(info["rng"])
+      # noisy_linvel = (
+      #     linvel
+      #     + (2 * jax.random.uniform(noise_rng, shape=linvel.shape) - 1)
+      #     * self._config.noise_config.level
+      #     * self._config.noise_config.scales.linvel
+      # )
+
+      state = jp.hstack([
+          noisy_gyro,  # 3
+          noisy_gravity,  # 3
+          info["command"],  # 3
+          noisy_joint_angles - self._default_pose,  # 29
+          noisy_joint_vel,  # 29
+          info["last_act"],  # 29
+      ])
+
+      accelerometer = self.get_accelerometer(data, "pelvis")
+      # global_angvel = self.get_global_angvel(data, "pelvis")
+      # feet_vel = data.sensordata[self._foot_linvel_sensor_adr].ravel()
+      root_height = data.qpos[2]
+
+      privileged_state = jp.hstack([
+          state,
+          gyro,  # 3
+          accelerometer,  # 3
+          gravity,  # 3
+          # linvel,  # 3
+          # global_angvel,  # 3
+          joint_angles - self._default_pose,
+          joint_vel,
+          root_height,  # 1
+          data.actuator_force,  # 29
+          contact,  # 2
+          # feet_vel,  # 4*3
+      ])
+
+      return {
+          "state": state,
+          "privileged_state": privileged_state,
+      }
+    
+  def _get_reward(self, data: mjx.Data) -> dict[str, jax.Array]:
+    return {
+        "target_joint": self.joint_target_l2(data.qpos, self.target_joints, jp.ones_like(self.target_joints)),
+        "joint_deviation": self.joint_deviation_l1(data.qpos, self.other_joints),
+    }
+  
+  def get_gravity(self, data: mjx.Data, frame: str) -> jax.Array:
+    """Return the gravity vector in the world frame."""
+    return mjx_env.get_sensor_data(
+        self.mj_model, data, f"{consts.GRAVITY_SENSOR}_{frame}"
+      )
+
+  def get_global_linvel(self, data: mjx.Data, frame: str) -> jax.Array:
+    """Return the linear velocity of the robot in the world frame."""
+    return mjx_env.get_sensor_data(
+        self.mj_model, data, f"{consts.GLOBAL_LINVEL_SENSOR}_{frame}"
+    )
+
+  def get_global_angvel(self, data: mjx.Data, frame: str) -> jax.Array:
+    """Return the angular velocity of the robot in the world frame."""
+    return mjx_env.get_sensor_data(
+        self.mj_model, data, f"{consts.GLOBAL_ANGVEL_SENSOR}_{frame}"
+    )
+
+  def get_local_linvel(self, data: mjx.Data, frame: str) -> jax.Array:
+    """Return the linear velocity of the robot in the local frame."""
+    return mjx_env.get_sensor_data(
+        self.mj_model, data, f"{consts.LOCAL_LINVEL_SENSOR}_{frame}"
+    )
+
+  def get_accelerometer(self, data: mjx.Data, frame: str) -> jax.Array:
+    """Return the accelerometer readings in the local frame."""
+    return mjx_env.get_sensor_data(
+        self.mj_model, data, f"{consts.ACCELEROMETER_SENSOR}_{frame}"
+    )
+
+  def get_gyro(self, data: mjx.Data, frame: str) -> jax.Array:
+    """Return the gyroscope readings in the local frame."""
+    return mjx_env.get_sensor_data(
+        self.mj_model, data, f"{consts.GYRO_SENSOR}_{frame}"
+    )
+
+  # Accessors.
+
+  # @property
+  # def xml_path(self) -> str:
+  #   return self._xml_path
+
+  @property
+  def action_size(self) -> int:
+    return self._mjx_model.nu
+
+  @property
+  def mj_model(self) -> mujoco.MjModel:
+    return self._mj_model
+
+  @property
+  def mjx_model(self) -> mjx.Model:
+    return self._mjx_model

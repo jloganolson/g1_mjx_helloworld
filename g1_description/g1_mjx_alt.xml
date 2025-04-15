@@ -286,13 +286,13 @@
     </body>
   </worldbody>
 
-  <!-- <contact>
+<contact>
     <pair name="left_foot_floor" geom1="left_foot" geom2="floor" condim="3" friction="0.6 0.6"/>
     <pair name="right_foot_floor" geom1="right_foot" geom2="floor" condim="3" friction="0.6 0.6"/>
     <pair name="left_hand_thigh" geom1="left_hand_collision" geom2="left_thigh" condim="1"/>
     <pair name="right_hand_thigh" geom1="right_hand_collision" geom2="right_thigh" condim="1"/>
     <pair name="left_foot_right_foot" geom1="left_foot" geom2="right_foot" condim="1"/>
-  </contact> -->
+  </contact>
 
   <actuator>
     <position class="hip_pitch" name="left_hip_pitch_joint" joint="left_hip_pitch_joint"/>
@@ -325,8 +325,12 @@
   </actuator>
 
   <sensor>
-    <gyro name="imu-pelvis-angular-velocity" site="imu_in_pelvis" noise="5e-4" cutoff="34.9"/>
-    <accelerometer name="imu-pelvis-linear-acceleration" site="imu_in_pelvis" noise="1e-2" cutoff="157"/>
+    <gyro name="gyro_pelvis" site="imu_in_pelvis" noise="5e-4" cutoff="34.9"/>
+    <accelerometer name="accelerometer_pelvis" site="imu_in_pelvis" noise="1e-2" cutoff="157"/>
+    <velocimeter site="imu_in_pelvis" name="local_linvel_pelvis"/>
+    <frameangvel objtype="site" objname="imu_in_pelvis" name="global_angvel_pelvis"/>
+    <framelinvel objtype="site" objname="imu_in_pelvis" name="global_linvel_pelvis"/>
+
     
     <framezaxis objtype="site" objname="imu_in_pelvis" name="upvector_pelvis"/>
     <framexaxis objtype="site" objname="imu_in_pelvis" name="forwardvector_pelvis"/>

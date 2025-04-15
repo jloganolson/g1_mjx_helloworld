@@ -6,12 +6,16 @@
 
 # ROOT_BODY = "torso_link"
 
-# GRAVITY_SENSOR = "upvector"
-# GLOBAL_LINVEL_SENSOR = "global_linvel"
-# GLOBAL_ANGVEL_SENSOR = "global_angvel"
-# LOCAL_LINVEL_SENSOR = "local_linvel"
-# ACCELEROMETER_SENSOR = "accelerometer"
-# GYRO_SENSOR = "gyro"
+GRAVITY_SENSOR = "upvector"
+GLOBAL_LINVEL_SENSOR = "global_linvel"
+GLOBAL_ANGVEL_SENSOR = "global_angvel"
+LOCAL_LINVEL_SENSOR = "local_linvel"
+ACCELEROMETER_SENSOR = "accelerometer"
+GYRO_SENSOR = "gyro"
+
+LEFT_FEET_GEOMS = ["left_foot"]
+RIGHT_FEET_GEOMS = ["right_foot"]
+FEET_GEOMS = LEFT_FEET_GEOMS + RIGHT_FEET_GEOMS
 
 RESTRICTED_JOINT_RANGE = (
     # Left leg. 6
