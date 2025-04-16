@@ -377,6 +377,7 @@ class G1Env(mjx_env.MjxEnv):
     return jp.square(
         base_height - self._config.reward_config.base_height_target
     )
+
   def _cost_termination(self, done: jax.Array) -> jax.Array:
     return done
 
