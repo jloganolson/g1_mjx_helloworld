@@ -39,43 +39,20 @@ def default_config() -> config_dict.ConfigDict:
      reward_config=config_dict.create(
         scales=config_dict.create(
           #the only 5 non-zero in go1 handstand
-          height=1.0,
-          orientation=1.0,
-          # contact=-0.1,
-          dof_pos_limits=-0.5,
+          height=-0.5,
+          orientation=0.1,
+          dof_pos_limits=-1.,
           pose=-0.1,
+          alive=1.,
+          termination=-100.0,
         ),
-          # scales=config_dict.create(
-          #     # Base related rewards.
-          #     height=1.0,
-          #     orientation=1.0,
-          #     contact=-0.1,
-          #     # Energy related rewards.
-          #     torques=0.0,
-          #     action_rate=0.0,
-          #     # For finetuning, use energy=-0.003 and dof_acc=-2.5e-7.
-          #     energy=0.0,
-          #     dof_acc=0.0,
-          #     # Other rewards.
-          #     termination=0.0,
-          #     # Pose related rewards.
-          #     dof_pos_limits=-0.5,
-          #     pose=-0.1,
-          #     stay_still=0.0,
-          # ),
-        # tracking_sigma=0.25,
-        # max_foot_height=0.15,
         base_height_target=0.793,
-        # max_contact_force=500.0,
       ),
       push_config=config_dict.create(
           enable=True,
           interval_range=[5.0, 10.0],
           magnitude_range=[0.1, 2.0],
-      ),
-      # lin_vel_x=[-1.0, 1.0],
-      # lin_vel_y=[-0.5, 0.5],
-      # ang_vel_yaw=[-1.0, 1.0],
+      )
     )
 
 class G1Env(mjx_env.MjxEnv):
@@ -382,7 +359,8 @@ class G1Env(mjx_env.MjxEnv):
         "orientation": self._reward_orientation(
             up, self._desired_up_vec
         ),
-        # "contact": self._cost_contact(data), 
+        "alive": self._reward_alive(),
+        "termination": self._cost_termination(done),
         "dof_pos_limits": self._cost_joint_pos_limits(data.qpos[7:]),
         "pose": self._cost_pose(data.qpos[7:]),
     }
@@ -399,7 +377,11 @@ class G1Env(mjx_env.MjxEnv):
     return jp.square(
         base_height - self._config.reward_config.base_height_target
     )
+  def _cost_termination(self, done: jax.Array) -> jax.Array:
+    return done
 
+  def _reward_alive(self) -> jax.Array:
+    return jp.array(1.0)
 
   def _cost_pose(self, qpos: jax.Array) -> jax.Array:
     return jp.sum(jp.square(qpos - self._default_pose))
