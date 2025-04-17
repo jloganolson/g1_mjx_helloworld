@@ -167,10 +167,20 @@ class G1Env(mjx_env.MjxEnv):
         "push_interval_steps": push_interval_steps,
     }
 
-    metrics = {}
-    for k in self._config.reward_config.scales.keys():
-        metrics[f"reward/{k}"] = jp.zeros(())
-    
+    metrics = {
+        # Standard reward keys
+        **{f"reward/{k}": jp.zeros(()) for k in self._config.reward_config.scales.keys()},
+        # Debug keys (unscaled rewards + state summaries)
+        **{f"debug/unscaled_{k}": jp.zeros(()) for k in self._config.reward_config.scales.keys()},
+        "debug/qpos_sum": jp.zeros(()),
+        "debug/qvel_sum": jp.zeros(()),
+        "debug/qacc_sum": jp.zeros(()),
+        "debug/actuator_force_sum": jp.zeros(()),
+        "debug/action_sum": jp.zeros(()),
+        "debug/done": jp.zeros(()),
+        "debug/final_reward": jp.zeros(()),
+    }
+
     contact = jp.array([
         geoms_colliding(data, geom_id, self._floor_geom_id)
         for geom_id in self._feet_geom_id
@@ -224,13 +234,28 @@ class G1Env(mjx_env.MjxEnv):
     obs = self._get_obs(data, state.info, contact)
     done = self._get_termination(data)
 
-    rewards = self._get_reward(
+    unscaled_rewards = self._get_reward(
         data, action, state.info, done
     )
     rewards = {
-        k: v * self._config.reward_config.scales[k] for k, v in rewards.items()
+        k: v * self._config.reward_config.scales[k] for k, v in unscaled_rewards.items()
     }
     reward = sum(rewards.values()) * self.dt
+
+    # Log unscaled rewards and state variables for debugging NaNs
+    debug_logs = {f"debug/unscaled_{k}": v for k, v in unscaled_rewards.items()}
+    # Ensure termination cost has float dtype to match initialization
+    debug_logs["debug/unscaled_termination"] = debug_logs["debug/unscaled_termination"].astype(float)
+    debug_logs.update({
+        "debug/qpos_sum": jp.sum(data.qpos),
+        "debug/qvel_sum": jp.sum(data.qvel),
+        "debug/qacc_sum": jp.sum(data.qacc),
+        "debug/actuator_force_sum": jp.sum(data.actuator_force),
+        "debug/action_sum": jp.sum(action),
+        "debug/done": done.astype(float),
+        "debug/final_reward": reward,
+    })
+    state.metrics.update(debug_logs)
 
     state.info["push"] = push
     state.info["step"] += 1

@@ -4,6 +4,7 @@ from ml_collections import config_dict
 os.environ['__NV_PRIME_RENDER_OFFLOAD'] = '1'
 os.environ['__GLX_VENDOR_LIBRARY_NAME'] = 'nvidia'
 os.environ['MUJOCO_GL'] = 'egl'
+os.environ['JAX_DEFAULT_MATMUL_PRECISION'] = 'highest'
 
 # Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
 xla_flags = os.environ.get('XLA_FLAGS', '')
@@ -21,6 +22,10 @@ import mediapy as media
 from randomize import domain_randomize
 import balance 
 from datetime import datetime
+
+from dotenv import load_dotenv
+load_dotenv()
+
 
 np.set_printoptions(precision=3, suppress=True, linewidth=100)
 
@@ -168,3 +173,7 @@ frames = eval_env_2.render(rollout, camera="track")
 frames_np = np.array(frames)
 frames_np_rearranged = np.transpose(frames_np, (0, 3, 1, 2))
 wandb.log({"video": wandb.Video(frames_np_rearranged, fps=1.0 / env.dt, format="gif")})
+
+wandb.finish()
+
+os.system("systemctl suspend")
