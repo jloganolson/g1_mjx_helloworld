@@ -1,4 +1,3 @@
-
 from typing import Any, Dict, Optional, Union
 
 import jax
@@ -66,6 +65,8 @@ class G1Env(mjx_env.MjxEnv):
       config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None,
   ) -> None:
     super().__init__(config, config_overrides)
+    # Temporary print to check config override
+    print(f"DEBUG: Height reward scale: {self._config.reward_config.scales.height}")
 
     self._xml_path = "../g1_description/scene_mjx_alt.xml"
     self._mj_model =  mujoco.MjModel.from_xml_path(self._xml_path)
