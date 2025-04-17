@@ -39,13 +39,19 @@ def default_config() -> config_dict.ConfigDict:
       ),
      reward_config=config_dict.create(
         scales=config_dict.create(
-          #the only 5 non-zero in go1 handstand
           height=-0.5,
-          orientation=0.1,
-          dof_pos_limits=-1.,
+          orientation=0.5,
+          dof_pos_limits=-0.5,
           pose=-0.1,
-          alive=1.,
+          alive=0.,
           termination=-100.0,
+          stay_still=-0.1,
+
+          # Energy related rewards.
+          torques=0,
+          action_rate=-0.01,
+          energy=-0.003,
+          dof_acc=-2.5e-7
         ),
         base_height_target=0.793,
       ),
@@ -53,7 +59,8 @@ def default_config() -> config_dict.ConfigDict:
           enable=True,
           interval_range=[5.0, 10.0],
           magnitude_range=[0.1, 2.0],
-      )
+      ),
+      mask_arms=True,
     )
 
 class G1Env(mjx_env.MjxEnv):
@@ -65,8 +72,6 @@ class G1Env(mjx_env.MjxEnv):
       config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None,
   ) -> None:
     super().__init__(config, config_overrides)
-    # Temporary print to check config override
-    print(f"DEBUG: Height reward scale: {self._config.reward_config.scales.height}")
 
     self._xml_path = "../g1_description/scene_mjx_alt.xml"
     self._mj_model =  mujoco.MjModel.from_xml_path(self._xml_path)
@@ -119,11 +124,12 @@ class G1Env(mjx_env.MjxEnv):
     rng, key = jax.random.split(rng)
     dxy = jax.random.uniform(key, (2,), minval=-0.5, maxval=0.5)
     qpos = qpos.at[0:2].set(qpos[0:2] + dxy)
-    rng, key = jax.random.split(rng)
-    yaw = jax.random.uniform(key, (1,), minval=-3.14, maxval=3.14)
-    quat = math.axis_angle_to_quat(jp.array([0, 0, 1]), yaw)
-    new_quat = math.quat_mul(qpos[3:7], quat)
-    qpos = qpos.at[3:7].set(new_quat)
+    #we're not doing random yaw for just balancing
+    # rng, key = jax.random.split(rng)
+    # yaw = jax.random.uniform(key, (1,), minval=-3.14, maxval=3.14)
+    # quat = math.axis_angle_to_quat(jp.array([0, 0, 1]), yaw)
+    # new_quat = math.quat_mul(qpos[3:7], quat)
+    # qpos = qpos.at[3:7].set(new_quat)
 
     # qpos[7:]=*U(0.5, 1.5)
     rng, key = jax.random.split(rng)
@@ -196,7 +202,14 @@ class G1Env(mjx_env.MjxEnv):
     data = state.data.replace(qvel=qvel)
     state = state.replace(data=data)
 
-    motor_targets = self._default_pose + action * self._config.action_scale
+    action_effect = action * self._config.action_scale
+    # Create a mask to zero out action for the last 10 joints (arms) if config is set.
+    # Assuming mjx_model.nu is 23.
+    arm_mask = jp.ones_like(action_effect).at[-10:].set(0.0)
+    masked_action_effect = jp.where(
+        self._config.mask_arms, action_effect * arm_mask, action_effect
+    )
+    motor_targets = self._default_pose + masked_action_effect
     data = mjx_env.step(
         self.mjx_model, state.data, motor_targets, self.n_substeps
     )
@@ -355,7 +368,7 @@ class G1Env(mjx_env.MjxEnv):
       done: jax.Array,
   ) -> dict[str, jax.Array]:
     up = data.site_xmat[self._pelvis_imu_site_id] @ jp.array([0.0, 0.0, 1.0])
-    # joint_torques = data.actuator_force
+    joint_torques = data.actuator_force
     # torso_height = data.site_xpos[self._imu_site_id][2]
     return {
         "height": self._cost_base_height(data.qpos[2]),
@@ -366,6 +379,12 @@ class G1Env(mjx_env.MjxEnv):
         "termination": self._cost_termination(done),
         "dof_pos_limits": self._cost_joint_pos_limits(data.qpos[7:]),
         "pose": self._cost_pose(data.qpos[7:]),
+        "stay_still": self._cost_stay_still(data.qvel[:6]),
+        "energy": self._cost_energy(data.qvel[6:], data.actuator_force),
+        "action_rate": self._cost_action_rate(action, info),
+        "torques": self._cost_torques(joint_torques),
+        "dof_acc": self._cost_dof_acc(data.qacc[6:]),
+
     }
   
 
@@ -381,6 +400,9 @@ class G1Env(mjx_env.MjxEnv):
         base_height - self._config.reward_config.base_height_target
     )
 
+  def _cost_stay_still(self, qvel: jax.Array) -> jax.Array:
+    return jp.sum(jp.square(qvel[:2])) + jp.square(qvel[5])
+
   def _cost_termination(self, done: jax.Array) -> jax.Array:
     return done
 
@@ -389,6 +411,21 @@ class G1Env(mjx_env.MjxEnv):
 
   def _cost_pose(self, qpos: jax.Array) -> jax.Array:
     return jp.sum(jp.square(qpos - self._default_pose))
+  
+  def _cost_torques(self, torques: jax.Array) -> jax.Array:
+    return jp.sum(jp.square(torques))
+
+  def _cost_energy(
+      self, qvel: jax.Array, qfrc_actuator: jax.Array
+  ) -> jax.Array:
+    return jp.sum(jp.abs(qvel) * jp.abs(qfrc_actuator))
+
+  def _cost_action_rate(
+      self, act: jax.Array, info: dict[str, Any]
+  ) -> jax.Array:
+        return jp.sum(jp.square(act - info["last_act"]))
+  def _cost_dof_acc(self, qacc: jax.Array) -> jax.Array:
+    return jp.sum(jp.square(qacc))
 
   def _cost_joint_pos_limits(self, qpos: jax.Array) -> jax.Array:
     out_of_limits = -jp.clip(qpos - self._soft_lowers, None, 0.0)

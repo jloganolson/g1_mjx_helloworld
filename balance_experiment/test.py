@@ -25,7 +25,9 @@ from datetime import datetime
 np.set_printoptions(precision=3, suppress=True, linewidth=100)
 
 # Define the reward scale override
-reward_overrides = {"reward_config": {"scales": {"height": -1.0}}}
+# reward_overrides = {"reward_config": {"scales": {"height": -1.0}}}
+reward_overrides = {}
+
 
 env = balance.G1Env(config_overrides=reward_overrides)
 eval_env = balance.G1Env(config_overrides=reward_overrides)
@@ -57,6 +59,7 @@ original_ppo_params = config_dict.create(
     reward_scaling=0.1,
     episode_length=env_cfg.episode_length,
     normalize_observations=True,
+    num_resets_per_eval=1,
     action_repeat=1,
     unroll_length=32,
     num_minibatches=32,
@@ -67,6 +70,7 @@ original_ppo_params = config_dict.create(
     num_envs=32768,
     batch_size=1024,
     num_evals=16,
+    clipping_epsilon=0.2,
     log_training_metrics=True,
     network_factory=config_dict.create(
         policy_hidden_layer_sizes=(512, 256, 64),
@@ -102,7 +106,7 @@ debug_ppo_params = config_dict.create(
 )
 
 # Select the parameters to use
-ppo_params = debug_ppo_params #original_ppo_params
+ppo_params = original_ppo_params #original_ppo_params
 
 x_data, y_data, y_dataerr = [], [], []
 times = [datetime.now()]
