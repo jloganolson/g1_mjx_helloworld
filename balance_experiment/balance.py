@@ -16,6 +16,8 @@ from mujoco_playground._src import collision
 from mujoco_playground._src import mjx_env
 import g1_constants as consts
 
+KEYFRAME_NAME = "home"
+
 def default_config() -> config_dict.ConfigDict:
     return config_dict.create(
         ctrl_dt=0.02,
@@ -82,8 +84,8 @@ class G1Env(mjx_env.MjxEnv):
     self._post_init()
 
   def _post_init(self) -> None:
-    self._init_q = jp.array(self._mj_model.keyframe("default_pose").qpos)
-    self._default_pose = jp.array(self._mj_model.keyframe("default_pose").qpos[7:])
+    self._init_q = jp.array(self._mj_model.keyframe(KEYFRAME_NAME).qpos)
+    self._default_pose = jp.array(self._mj_model.keyframe(KEYFRAME_NAME).qpos[7:])
 
     self._floor_geom_id = self._mj_model.geom("floor").id
     self._feet_geom_id = np.array([self._mj_model.geom(name).id for name in consts.FEET_GEOMS])
