@@ -329,7 +329,7 @@ class G1Env(mjx_env.MjxEnv):
       # )
 
       state = jp.hstack([
-          noisy_gyro,  # 3
+          # noisy_gyro,  # 3
           noisy_gravity,  # 3
           noisy_joint_angles - self._default_pose,  # 23
           noisy_joint_vel,  # 23

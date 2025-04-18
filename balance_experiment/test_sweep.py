@@ -44,15 +44,16 @@ def train_run(config=None):
 
        # Get the reward scale set directly from the sweep config
     # if hasattr(cfg, 'reward_scale_set') and isinstance(cfg.reward_scale_set, dict):
-    reward_scales ={"pose": cfg.pose }
-    merged_reward_config = env_cfg.reward_config.copy_and_resolve_references()
-    merged_reward_config.scales.update(reward_scales) # Update the scales part
-    reward_overrides = {"reward_config": merged_reward_config}
+    
+    # reward_scales ={"pose": cfg.pose }
+    # merged_reward_config = env_cfg.reward_config.copy_and_resolve_references()
+    # merged_reward_config.scales.update(reward_scales) # Update the scales part
+    # reward_overrides = {"reward_config": merged_reward_config}
 
 
 
 
-    # reward_overrides = {}
+    reward_overrides = {}
     # reward_overrides = {"reward_config": {"scales": {"pose": cfg.pose}}}
     # Initialize environment with potentially updated reward config
     env = balance.G1Env(config_overrides=reward_overrides)
@@ -183,3 +184,5 @@ def train_run(config=None):
     print("Evaluation finished.")
     run.finish()
 
+if __name__ == "__main__":
+    train_run()
