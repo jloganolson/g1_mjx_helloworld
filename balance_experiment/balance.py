@@ -53,7 +53,7 @@ def default_config() -> config_dict.ConfigDict:
           energy=-0.003,
           dof_acc=-2.5e-7
         ),
-        base_height_target=0.793,
+        base_height_target=0.55,
       ),
       push_config=config_dict.create(
           enable=True,
@@ -168,17 +168,7 @@ class G1Env(mjx_env.MjxEnv):
     }
 
     metrics = {
-        # Standard reward keys
         **{f"reward/{k}": jp.zeros(()) for k in self._config.reward_config.scales.keys()},
-        # Debug keys (unscaled rewards + state summaries)
-        **{f"debug/unscaled_{k}": jp.zeros(()) for k in self._config.reward_config.scales.keys()},
-        "debug/qpos_sum": jp.zeros(()),
-        "debug/qvel_sum": jp.zeros(()),
-        "debug/qacc_sum": jp.zeros(()),
-        "debug/actuator_force_sum": jp.zeros(()),
-        "debug/action_sum": jp.zeros(()),
-        "debug/done": jp.zeros(()),
-        "debug/final_reward": jp.zeros(()),
     }
 
     contact = jp.array([
@@ -242,20 +232,6 @@ class G1Env(mjx_env.MjxEnv):
     }
     reward = sum(rewards.values()) * self.dt
 
-    # Log unscaled rewards and state variables for debugging NaNs
-    debug_logs = {f"debug/unscaled_{k}": v for k, v in unscaled_rewards.items()}
-    # Ensure termination cost has float dtype to match initialization
-    debug_logs["debug/unscaled_termination"] = debug_logs["debug/unscaled_termination"].astype(float)
-    debug_logs.update({
-        "debug/qpos_sum": jp.sum(data.qpos),
-        "debug/qvel_sum": jp.sum(data.qvel),
-        "debug/qacc_sum": jp.sum(data.qacc),
-        "debug/actuator_force_sum": jp.sum(data.actuator_force),
-        "debug/action_sum": jp.sum(action),
-        "debug/done": done.astype(float),
-        "debug/final_reward": reward,
-    })
-    state.metrics.update(debug_logs)
 
     state.info["push"] = push
     state.info["step"] += 1
@@ -418,12 +394,15 @@ class G1Env(mjx_env.MjxEnv):
   ) -> jax.Array:
     cos_dist = jp.dot(imu_up_vec, world_up_vec)
     normalized = 0.5 * cos_dist + 0.5
-    return jp.square(normalized)
+    # return jp.square(normalized)
+    return normalized
+  
 
   def _cost_base_height(self, base_height: jax.Array) -> jax.Array:
-    return jp.square(
-        base_height - self._config.reward_config.base_height_target
-    )
+    shortfall = self._config.reward_config.base_height_target - base_height
+    penalty_base = jp.clip(shortfall, a_min=0.0)
+    return  jp.square(penalty_base)
+ 
 
   def _cost_stay_still(self, qvel: jax.Array) -> jax.Array:
     return jp.sum(jp.square(qvel[:2])) + jp.square(qvel[5])
@@ -435,8 +414,9 @@ class G1Env(mjx_env.MjxEnv):
     return jp.array(1.0)
 
   def _cost_pose(self, qpos: jax.Array) -> jax.Array:
-    return jp.sum(jp.square(qpos - self._default_pose))
-  
+    # return jp.sum(jp.square(qpos - self._default_pose))
+    return jp.sum(jp.abs(qpos - self._default_pose))
+ 
   def _cost_torques(self, torques: jax.Array) -> jax.Array:
     return jp.sum(jp.square(torques))
 
@@ -449,6 +429,7 @@ class G1Env(mjx_env.MjxEnv):
       self, act: jax.Array, info: dict[str, Any]
   ) -> jax.Array:
         return jp.sum(jp.square(act - info["last_act"]))
+  
   def _cost_dof_acc(self, qacc: jax.Array) -> jax.Array:
     return jp.sum(jp.square(qacc))
 

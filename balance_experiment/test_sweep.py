@@ -42,20 +42,18 @@ def train_run(config=None):
     # Start with the default environment config
     env_cfg = balance.default_config()
 
-    # Get the reward scale set directly from the sweep config
-    if hasattr(cfg, 'reward_scale_set') and isinstance(cfg.reward_scale_set, dict):
-        reward_scales = cfg.reward_scale_set
-        # Create the correct overrides: Update ONLY the scales within the default reward_config
-        # Make a copy to avoid modifying the original default_config object if it's reused
-        merged_reward_config = env_cfg.reward_config.copy_and_resolve_references()
-        merged_reward_config.scales.update(reward_scales) # Update the scales part
-        reward_overrides = {"reward_config": merged_reward_config}
-    else:
-        print("Warning: 'reward_scale_set' not found in wandb.config or is not a dict. Using default reward config.")
-        reward_overrides = {}
+       # Get the reward scale set directly from the sweep config
+    # if hasattr(cfg, 'reward_scale_set') and isinstance(cfg.reward_scale_set, dict):
+    reward_scales ={"pose": cfg.pose }
+    merged_reward_config = env_cfg.reward_config.copy_and_resolve_references()
+    merged_reward_config.scales.update(reward_scales) # Update the scales part
+    reward_overrides = {"reward_config": merged_reward_config}
 
-    print(f"Using reward overrides (showing only scales): {reward_overrides.get('reward_config', {}).get('scales', {})}")
 
+
+
+    # reward_overrides = {}
+    # reward_overrides = {"reward_config": {"scales": {"pose": cfg.pose}}}
     # Initialize environment with potentially updated reward config
     env = balance.G1Env(config_overrides=reward_overrides)
     eval_env = balance.G1Env(config_overrides=reward_overrides)
@@ -129,6 +127,31 @@ def train_run(config=None):
     )
     print("\nTraining finished.")
 
+    # --- Save Final Checkpoint as Wandb Artifact ---
+    print(f"Checking for final checkpoint in {ckpt_path}...")
+    try:
+        # List all entries in the checkpoint directory
+        entries = os.listdir(ckpt_path)
+        # Filter for directories that are valid integers (potential timesteps)
+        timestep_dirs = [d for d in entries if os.path.isdir(os.path.join(ckpt_path, d)) and d.isdigit()]
+
+        if timestep_dirs:
+            # Find the directory with the highest timestep number
+            latest_timestep_dir = max(timestep_dirs, key=int)
+            final_ckpt_path = os.path.join(ckpt_path, latest_timestep_dir)
+
+            print(f"Saving final checkpoint {final_ckpt_path} to wandb...")
+            artifact = wandb.Artifact(f'{exp_name}-checkpoint', type='model')
+            # Add the entire directory as the artifact
+            artifact.add_dir(final_ckpt_path)
+            run.log_artifact(artifact)
+            print("Checkpoint saved to wandb.")
+        else:
+            print(f"Warning: No valid checkpoint directories found in {ckpt_path}.")
+    except Exception as e:
+        print(f"Error finding or saving final checkpoint: {e}")
+
+
     # --- Evaluation & Logging ---
     print("Starting evaluation...")
     # Use a fresh eval env instance with the same overrides
@@ -139,40 +162,23 @@ def train_run(config=None):
     jit_inference_fn = jax.jit(make_inference_fn(params, deterministic=True))
 
     rng = jax.random.PRNGKey(cfg.get('eval_seed', 42))
-    rollout_states = [] # Store full State objects for rendering
+    rollout = []
     n_episodes = 1
 
-    episode_rewards = []
-    state = jit_reset(rng)
-    rollout_states.append(state) # Store initial state
-
-    current_episode_reward = 0
-    for _ in range(env_cfg.episode_length):
-        act_rng, rng = jax.random.split(rng)
-        ctrl, _ = jit_inference_fn(state.obs, act_rng)
-        state = jit_step(state, ctrl)
-        rollout_states.append(state)
-        current_episode_reward += state.reward
-
-    episode_rewards.append(current_episode_reward)
-
-    avg_eval_reward = np.mean(episode_rewards)
+    for _ in range(n_episodes):
+        state = jit_reset(rng)
+        rollout.append(state)
+        for i in range(env_cfg.episode_length):
+            act_rng, rng = jax.random.split(rng)
+            ctrl, _ = jit_inference_fn(state.obs, act_rng)
+            state = jit_step(state, ctrl)
+            rollout.append(state)
 
 
-    # Log video of the episode
-    try:
-        # Pass pipeline states to render function if that's what it expects
-        pipeline_states = [s.pipeline_state for s in rollout_states]
-        frames = eval_env_2.render(pipeline_states, camera="track")
-        frames_np = np.array(frames)
-        if frames_np.ndim == 4 and frames_np.shape[-1] == 3:
-            frames_np_rearranged = np.transpose(frames_np, (0, 3, 1, 2))
-            # Log video without specifying a step
-            wandb.log({"evaluation_video": wandb.Video(frames_np_rearranged, fps=1.0 / eval_env_2.dt, format="mp4")})
-        else:
-            print(f"Warning: Could not log video, unexpected frame format: {frames_np.shape}")
-    except Exception as e:
-        print(f"Warning: Rendering or video logging failed: {e}")
+    frames = eval_env_2.render(rollout, camera="track")
+    frames_np = np.array(frames)
+    frames_np_rearranged = np.transpose(frames_np, (0, 3, 1, 2))
+    wandb.log({"video": wandb.Video(frames_np_rearranged, fps=1.0 / env.dt, format="gif")})
 
     print("Evaluation finished.")
     run.finish()
